@@ -1,0 +1,219 @@
+version: '3.8'
+
+# Docker Compose configuration for Issues Board application
+# Provides complete local development environment with all dependencies
+
+services:
+  # MySQL Database Service
+  mysql:
+    image: mysql:8.0
+    container_name: issues_board_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: issues_board
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_USER: laravel
+      MYSQL_PASSWORD: laravel_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d
+    networks:
+      - issues_board_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  # Redis Service (for caching and queue jobs)
+  redis:
+    image: redis:7-alpine
+    container_name: issues_board_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - issues_board_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 10s
+      retries: 5
+
+  # Laravel Backend Application
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: issues_board_backend
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - ./backend:/var/www/html
+      - ./docker/php/php.ini:/usr/local/etc/php/php.ini
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=issues_board
+      - DB_USERNAME=laravel
+      - DB_PASSWORD=laravel_password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - BROADCAST_DRIVER=reverb
+      - QUEUE_CONNECTION=redis
+      - CACHE_DRIVER=redis
+      - SESSION_DRIVER=redis
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - issues_board_network
+    command: >
+      bash -c "
+        composer install &&
+        php artisan key:generate --no-interaction &&
+        php artisan migrate --no-interaction &&
+        php artisan db:seed --no-interaction &&
+        php artisan serve --host=0.0.0.0 --port=8000
+      "
+
+  # Laravel Reverb WebSocket Server
+  websocket:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: issues_board_websocket
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - ./backend:/var/www/html
+    ports:
+      - "8080:8080"
+    environment:
+      - APP_ENV=local
+      - REVERB_APP_ID=local
+      - REVERB_APP_KEY=local
+      - REVERB_APP_SECRET=local
+      - REVERB_HOST=0.0.0.0
+      - REVERB_PORT=8080
+      - REVERB_SCHEME=http
+    depends_on:
+      - backend
+    networks:
+      - issues_board_network
+    command: php artisan reverb:start --host=0.0.0.0 --port=8080
+
+  # Laravel Queue Worker
+  queue:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: issues_board_queue
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - ./backend:/var/www/html
+    environment:
+      - APP_ENV=local
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=issues_board
+      - DB_USERNAME=laravel
+      - DB_PASSWORD=laravel_password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=redis
+    depends_on:
+      - backend
+      - redis
+    networks:
+      - issues_board_network
+    command: php artisan queue:work --verbose --tries=3 --timeout=90
+
+  # React Frontend Application
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: issues_board_frontend
+    restart: unless-stopped
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - REACT_APP_API_URL=http://localhost:8000/api/v1
+      - REACT_APP_WS_HOST=localhost
+      - REACT_APP_WS_PORT=8080
+    depends_on:
+      - backend
+    networks:
+      - issues_board_network
+    stdin_open: true
+    tty: true
+    command: npm start
+
+  # phpMyAdmin (Database Management Interface)
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: issues_board_phpmyadmin
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_USER: laravel
+      PMA_PASSWORD: laravel_password
+      MYSQL_ROOT_PASSWORD: root_password
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - issues_board_network
+
+  # Redis Commander (Redis Management Interface)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: issues_board_redis_commander
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - issues_board_network
+
+# Persistent Volume Definitions
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# Network Definition
+networks:
+  issues_board_network:
+    driver: bridge
+
+# Health Check and Monitoring
+# You can add additional services like:
+# - Nginx (reverse proxy)
+# - Elasticsearch (for advanced search)
+# - Monitoring tools (Prometheus, Grafana)
+# - Log aggregation (ELK stack)

@@ -1,0 +1,295 @@
+# Issues Board Application
+
+## Project Structure Choice: Option B (Separate Projects)
+
+I chose **Option B** (two separate projects) for the following reasons:
+
+### Why Option B?
+- **Better Separation of Concerns**: Clear boundary between API and frontend
+- **Scalability**: Frontend and backend can be deployed independently
+- **Technology Flexibility**: Easy to swap frontend frameworks or add mobile apps
+- **Team Development**: Frontend and backend teams can work independently
+- **API First**: Encourages building a proper REST API that can serve multiple clients
+
+### Trade-offs:
+- **Development Speed**: Slightly slower initial setup (2 repos vs 1)
+- **Deployment Complexity**: Requires separate deployment processes
+- **CORS Configuration**: Need to handle cross-origin requests
+- **Security**: More network calls, but better isolation
+
+## Project Structure
+
+```
+issues-board/
+├── backend/              # Laravel API
+│   ├── app/
+│   ├── database/
+│   ├── routes/
+│   └── ...
+└── frontend/            # React SPA
+    ├── src/
+    ├── public/
+    └── ...
+```
+
+## Setup Instructions
+
+### Backend Setup (Laravel)
+
+1. **Create Laravel Project**
+```bash
+composer create-project laravel/laravel backend
+cd backend
+```
+
+2. **Install Dependencies**
+```bash
+composer require pusher/pusher-php-server
+composer require laravel/reverb --dev
+```
+
+3. **Environment Configuration**
+```bash
+cp .env.example .env
+php artisan key:generate
+```
+
+Update `.env`:
+```env
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=issues_board
+DB_USERNAME=your_username
+DB_PASSWORD=your_password
+
+BROADCAST_DRIVER=reverb
+REVERB_APP_ID=local
+REVERB_APP_KEY=local
+REVERB_APP_SECRET=local
+REVERB_HOST=localhost
+REVERB_PORT=8080
+REVERB_SCHEME=http
+```
+
+4. **Database Setup**
+```bash
+# Create database
+mysql -u root -p -e "CREATE DATABASE issues_board;"
+
+# Run migrations and seeds
+php artisan migrate
+php artisan db:seed
+```
+
+5. **Start Servers**
+```bash
+# Terminal 1: Laravel server
+php artisan serve
+
+# Terminal 2: WebSocket server
+php artisan reverb:start
+
+# Terminal 3: Queue worker (for broadcasting)
+php artisan queue:work
+```
+
+### Frontend Setup (React)
+
+1. **Create React App**
+```bash
+npx create-react-app frontend
+cd frontend
+```
+
+2. **Install Dependencies**
+```bash
+npm install -D tailwindcss postcss autoprefixer
+npx tailwindcss init -p
+```
+
+3. **Start Development Server**
+```bash
+npm start
+```
+
+## API Endpoints
+
+### GET /api/issues
+**Purpose**: Retrieve paginated list of issues with filtering
+
+**Parameters**:
+- `page` (optional): Page number for pagination
+- `per_page` (optional): Items per page (default: 15)
+- `status` (optional): Filter by status (open, in_progress, closed)
+- `priority` (optional): Filter by priority (low, medium, high, critical)
+- `search` (optional): Search in title and description
+
+**Example Request**:
+```bash
+GET http://localhost:8000/api/issues?page=1&status=open&search=bug
+```
+
+**Example Response**:
+```json
+{
+  "data": [
+    {
+      "id": 1,
+      "title": "Login Bug",
+      "description": "Users cannot login",
+      "status": "open",
+      "priority": "high",
+      "created_at": "2025-01-20T10:00:00Z",
+      "updated_at": "2025-01-20T10:00:00Z"
+    }
+  ],
+  "meta": {
+    "current_page": 1,
+    "per_page": 15,
+    "total": 1,
+    "last_page": 1
+  },
+  "links": {
+    "first": "http://localhost:8000/api/issues?page=1",
+    "last": "http://localhost:8000/api/issues?page=1",
+    "prev": null,
+    "next": null
+  }
+}
+```
+
+### POST /api/issues
+**Purpose**: Create a new issue
+
+**Example Request**:
+```bash
+POST http://localhost:8000/api/issues
+Content-Type: application/json
+
+{
+  "title": "New Bug Report",
+  "description": "Detailed description of the bug",
+  "status": "open",
+  "priority": "medium"
+}
+```
+
+**Example Response**:
+```json
+{
+  "data": {
+    "id": 2,
+    "title": "New Bug Report",
+    "description": "Detailed description of the bug",
+    "status": "open",
+    "priority": "medium",
+    "created_at": "2025-01-20T11:00:00Z",
+    "updated_at": "2025-01-20T11:00:00Z"
+  },
+  "message": "Issue created successfully"
+}
+```
+
+## Database Schema
+
+### Issues Table
+```sql
+CREATE TABLE issues (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL,
+    status ENUM('open', 'in_progress', 'closed') NOT NULL DEFAULT 'open',
+    priority ENUM('low', 'medium', 'high', 'critical') NOT NULL DEFAULT 'medium',
+    created_at TIMESTAMP NULL,
+    updated_at TIMESTAMP NULL,
+    
+    INDEX idx_status (status),
+    INDEX idx_priority (priority),
+    INDEX idx_created_at (created_at),
+    FULLTEXT(title, description)
+);
+```
+
+### Design Rationale:
+- **BIGINT ID**: Supports large scale applications
+- **ENUMs**: Ensures data consistency for status and priority
+- **Indexes**: Optimizes common queries (status, priority, date)
+- **FULLTEXT**: Enables efficient text search
+- **Timestamps**: Tracks creation and modification times
+
+## Response Format Strategy
+
+### Success Responses:
+- **Single Resource**: `{ "data": {...}, "message": "..." }`
+- **Collections**: `{ "data": [...], "meta": {...}, "links": {...} }`
+
+### Error Responses:
+- **Validation**: `{ "message": "...", "errors": {...} }`
+- **Not Found**: `{ "message": "Issue not found" }`
+- **Server Error**: `{ "message": "Internal server error" }`
+
+## Real-time Implementation
+
+### Backend (Laravel):
+- Uses Laravel Reverb for WebSocket server
+- Broadcasts events when issues are created/updated
+- Events: `IssueCreated`, `IssueUpdated`
+
+### Frontend (React):
+- Connects to WebSocket using Pusher JS client
+- Subscribes to `issues` channel
+- Updates UI automatically with visual feedback
+
+## Validation & Error Handling
+
+### Validation Rules:
+- `title`: required, string, max 255 characters
+- `description`: required, string
+- `status`: required, in ['open', 'in_progress', 'closed']
+- `priority`: required, in ['low', 'medium', 'high', 'critical']
+
+### Error Handling:
+- Input validation with custom form requests
+- Try-catch blocks for database operations
+- Consistent error response format
+- Logging of all errors and operations
+
+## Logging Strategy
+
+### What We Log:
+- API requests and responses
+- Database operations
+- WebSocket broadcasts
+- Validation failures
+- System errors
+
+### Log Levels:
+- **INFO**: Successful operations
+- **WARNING**: Validation failures
+- **ERROR**: System errors and exceptions
+
+## Testing
+
+Run the automated tests:
+```bash
+php artisan test
+```
+
+Tests cover:
+- Issue creation and validation
+- API endpoints
+- Real-time broadcasting
+- Error scenarios
+
+## Demo Checklist
+
+When demonstrating:
+1.  Start all servers (Laravel, Reverb, Frontend)
+2.  Show issue list loading with pagination
+3.  Create new issue and show real-time update
+4.  Update issue status and show live changes
+5.  Trigger validation error
+6.  Show database schema and explain design
+7.  Display logs for operations
+8.  Explain architectural decisions
